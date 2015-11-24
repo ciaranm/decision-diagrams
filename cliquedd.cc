@@ -27,7 +27,7 @@ struct BDD
     std::vector<Level> levels;
 };
 
-void add_node(Level & level, Node & node, unsigned long long & nodes_created, unsigned long long & nodes_reused)
+void add_node(Level & level, Node && node, unsigned long long & nodes_created, unsigned long long & nodes_reused)
 {
     for (auto & d : level.nodes)
         if (d.p == node.p) {
@@ -36,7 +36,7 @@ void add_node(Level & level, Node & node, unsigned long long & nodes_created, un
             return;
         }
 
-    level.nodes.push_back(node);
+    level.nodes.push_back(std::move(node));
     ++nodes_created;
 }
 
@@ -55,14 +55,14 @@ void build_level(const Graph & graph, BDD & bdd, int level, unsigned long long &
             for (auto & v : n.p)
                 if (graph.adjacent(v, branch_vertex))
                     accept.p.insert(v);
-            add_node(bdd.levels[level], accept, a_nodes_created, a_nodes_reused);
+            add_node(bdd.levels[level], std::move(accept), a_nodes_created, a_nodes_reused);
         }
 
         Node reject;
         reject.score = n.score;
         reject.p = n.p;
         reject.p.erase(branch_vertex);
-        add_node(bdd.levels[level], reject, a_nodes_created, a_nodes_reused);
+        add_node(bdd.levels[level], std::move(reject), a_nodes_created, a_nodes_reused);
     }
 }
 
@@ -77,15 +77,15 @@ int solve_relaxed(const Graph & graph, BDD & bdd,
             std::sort(level_nodes.begin(), level_nodes.end(), [] (const Node & a, const Node & b) {
                     return std::make_tuple(a.score, a.p.size()) > std::make_tuple(b.score, b.p.size());
                     });
-            while (level_nodes.size() > max_width) {
-                Node merged;
-                Node & a = level_nodes[level_nodes.size() - 1], & b = level_nodes[level_nodes.size() - 2];
-                merged.score = std::max(a.score, b.score);
-                std::set_union(a.p.begin(), a.p.end(), b.p.begin(), b.p.end(), std::inserter(merged.p, merged.p.end()));
+
+            Node merged = { 0, {} };
+            while (level_nodes.size() >= max_width) {
+                Node & n = level_nodes[level_nodes.size() - 1];
+                merged.score = std::max(merged.score, n.score);
+                std::set_union(merged.p.begin(), merged.p.end(), n.p.begin(), n.p.end(), std::inserter(merged.p, merged.p.end()));
                 level_nodes.pop_back();
-                level_nodes.pop_back();
-                level_nodes.push_back(merged);
             }
+            level_nodes.push_back(std::move(merged));
         }
     }
 
