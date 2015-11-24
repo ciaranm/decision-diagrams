@@ -1,8 +1,11 @@
 /* vim: set sw=4 sts=4 et foldmethod=syntax : */
 
 #include <set>
-#include <list>
+#include <vector>
 #include <iostream>
+#include <algorithm>
+#include <tuple>
+#include <utility>
 
 #include "graph.hh"
 #include "dimacs.hh"
@@ -15,7 +18,7 @@ struct Node
 
 struct Level
 {
-    std::list<Node> nodes;
+    std::vector<Node> nodes;
 };
 
 struct BDD
@@ -24,47 +27,98 @@ struct BDD
     std::vector<Level> levels;
 };
 
-void add_node(Level & level, Node & node)
+void add_node(Level & level, Node & node, unsigned long long & nodes_created, unsigned long long & nodes_reused)
 {
     for (auto & d : level.nodes)
         if (d.p == node.p) {
             d.score = std::max(d.score, node.score);
+            ++nodes_reused;
             return;
         }
 
     level.nodes.push_back(node);
+    ++nodes_created;
 }
 
-const int max_width = 10;
+const int max_width = 20;
 
-void solve(const Graph & graph, BDD & bdd, int & incumbent)
+void build_level(const Graph & graph, BDD & bdd, int level, unsigned long long & a_nodes_created, unsigned long long & a_nodes_reused)
+{
+    bdd.levels[level].nodes.reserve(bdd.levels[level - 1].nodes.size() * 2);
+
+    int branch_vertex = *std::next(bdd.levels[0].nodes.begin()->p.begin(), level - 1);
+
+    for (auto & n : bdd.levels[level - 1].nodes) {
+        if (n.p.count(branch_vertex)) {
+            Node accept;
+            accept.score = n.score + 1;
+            for (auto & v : n.p)
+                if (graph.adjacent(v, branch_vertex))
+                    accept.p.insert(v);
+            add_node(bdd.levels[level], accept, a_nodes_created, a_nodes_reused);
+        }
+
+        Node reject;
+        reject.score = n.score;
+        reject.p = n.p;
+        reject.p.erase(branch_vertex);
+        add_node(bdd.levels[level], reject, a_nodes_created, a_nodes_reused);
+    }
+}
+
+int solve_relaxed(const Graph & graph, BDD & bdd,
+        unsigned long long & relaxed_nodes_created, unsigned long long & relaxed_nodes_reused)
 {
     for (int level = 1 ; level <= bdd.height ; ++level) {
-        int branch_vertex = *std::next(bdd.levels[0].nodes.begin()->p.begin(), level - 1);
+        build_level(graph, bdd, level, relaxed_nodes_created, relaxed_nodes_reused);
 
-        for (auto & n : bdd.levels[level - 1].nodes) {
-            if (n.p.count(branch_vertex)) {
-                Node accept;
-                accept.score = n.score + 1;
-                for (auto & v : n.p)
-                    if (graph.adjacent(v, branch_vertex))
-                        accept.p.insert(v);
-                add_node(bdd.levels[level], accept);
+        auto & level_nodes = bdd.levels[level].nodes;
+        if (level_nodes.size() > max_width) {
+            std::sort(level_nodes.begin(), level_nodes.end(), [] (const Node & a, const Node & b) {
+                    return std::make_tuple(a.score, a.p.size()) > std::make_tuple(b.score, b.p.size());
+                    });
+            while (level_nodes.size() > max_width) {
+                Node merged;
+                Node & a = level_nodes[level_nodes.size() - 1], & b = level_nodes[level_nodes.size() - 2];
+                merged.score = std::max(a.score, b.score);
+                std::set_union(a.p.begin(), a.p.end(), b.p.begin(), b.p.end(), std::inserter(merged.p, merged.p.end()));
+                level_nodes.pop_back();
+                level_nodes.pop_back();
+                level_nodes.push_back(merged);
             }
-
-            Node reject;
-            reject.score = n.score;
-            reject.p = n.p;
-            reject.p.erase(branch_vertex);
-            add_node(bdd.levels[level], reject);
         }
+    }
+
+    int bound = 0;
+    for (auto & n : bdd.levels[bdd.height].nodes)
+        bound = std::max(bound, n.score);
+    return bound;
+}
+
+void solve(const Graph & graph, BDD & bdd, int & incumbent, unsigned long long & nodes_created, unsigned long long & nodes_reused,
+        unsigned long long & relaxed_nodes_created, unsigned long long & relaxed_nodes_reused,
+        unsigned long long & bdds_created, unsigned long long & bdds_pruned)
+{
+    for (int level = 1 ; level <= bdd.height ; ++level) {
+        build_level(graph, bdd, level, nodes_created, nodes_reused);
 
         if (bdd.levels[level].nodes.size() > max_width) {
             for (auto & n : bdd.levels[level].nodes) {
-                BDD child_bdd{ int(n.p.size()), std::vector<Level>(n.p.size() + 1) };
-                child_bdd.levels[0] = { Level{ { Node{ n.score, n.p } } } };
+                BDD relaxed_bdd{ int(n.p.size()), std::vector<Level>(n.p.size() + 1) };
+                relaxed_bdd.levels[0] = { Level{ { Node{ n.score, n.p } } } };
+                int bound = solve_relaxed(graph, relaxed_bdd, relaxed_nodes_created, relaxed_nodes_reused);
 
-                solve(graph, child_bdd, incumbent);
+                if (bound > incumbent) {
+                    ++bdds_created;
+                    BDD child_bdd{ int(n.p.size()), std::vector<Level>(n.p.size() + 1) };
+                    child_bdd.levels[0] = { Level{ { Node{ n.score, n.p } } } };
+
+                    solve(graph, child_bdd, incumbent, nodes_created, nodes_reused, relaxed_nodes_created,
+                            relaxed_nodes_reused, bdds_created, bdds_pruned);
+                }
+                else {
+                    ++bdds_pruned;
+                }
             }
             return;
         }
@@ -89,7 +143,9 @@ int main(int, char * argv[])
     bdd.levels[0] = { Level{ { Node{ 0, all_vertices } } } };
 
     int incumbent = 0;
-    solve(graph, bdd, incumbent);
-    std::cout << incumbent << std::endl;
+    unsigned long long nodes_created = 1, nodes_reused = 0, relaxed_nodes_created = 0, relaxed_nodes_reused = 0,
+                  bdds_created = 1, bdds_pruned = 0;
+    solve(graph, bdd, incumbent, nodes_created, nodes_reused, relaxed_nodes_created, relaxed_nodes_reused, bdds_created, bdds_pruned);
+    std::cout << incumbent << " " << nodes_created << " " << nodes_reused << " " << bdds_created << " " << bdds_pruned << std::endl;
 }
 
