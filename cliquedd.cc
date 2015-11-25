@@ -42,6 +42,15 @@ struct BDD
     unsigned height;
 
     vector<Level> levels;
+
+    explicit BDD(unsigned h, unsigned width) :
+        full_max_width(width),
+        relaxed_max_width(width),
+        restricted_max_width(width),
+        height(h),
+        levels(h + 1)
+    {
+    }
 };
 
 void add_node(Level & level, Node && node, unsigned long long & nodes_created, unsigned long long & nodes_reused)
@@ -167,13 +176,13 @@ void solve(const Graph & graph, BDD & bdd, int & incumbent, unsigned long long &
 
         if (bdd.levels[level].nodes.size() > bdd.full_max_width) {
             for (auto & n : bdd.levels[level].nodes) {
-                BDD relaxed_bdd{ n.state.count(), n.state.count(), n.state.count(), n.state.count(), vector<Level>(n.state.count() + 1) };
+                BDD relaxed_bdd(n.state.count(), n.state.count());
                 relaxed_bdd.levels[0] = { Level{ { Node{ n.score, n.state } } } };
                 int bound = solve_relaxed(graph, relaxed_bdd, relaxed_nodes_created, relaxed_nodes_reused);
 
                 if (bound > incumbent) {
                     ++bdds_created;
-                    BDD child_bdd{ n.state.count(), n.state.count(), n.state.count(), n.state.count(), vector<Level>(n.state.count() + 1) };
+                    BDD child_bdd(n.state.count(), n.state.count());
                     child_bdd.levels[0] = { Level{ { Node{ n.score, n.state } } } };
 
                     solve(graph, child_bdd, incumbent, nodes_created, nodes_reused, relaxed_nodes_created,
@@ -199,7 +208,7 @@ int main(int, char * argv[])
 {
     Graph graph = read_dimacs(argv[1]);
 
-    BDD bdd{ unsigned(graph.size()), unsigned(graph.size()), unsigned(graph.size()), unsigned(graph.size()), vector<Level>(graph.size() + 1) };
+    BDD bdd(graph.size(), graph.size());
 
     dynamic_bitset<> all_vertices(graph.size(), 0);
     for (int i = 0 ; i < graph.size() ; ++i)
