@@ -36,17 +36,11 @@ struct Level
 
 struct BDD
 {
-    unsigned full_max_width;
-    unsigned relaxed_max_width;
-    unsigned restricted_max_width;
     unsigned height;
 
     vector<Level> levels;
 
-    explicit BDD(unsigned h, unsigned width) :
-        full_max_width(width),
-        relaxed_max_width(width),
-        restricted_max_width(width),
+    explicit BDD(unsigned h) :
         height(h),
         levels(h + 1)
     {
@@ -104,20 +98,23 @@ void build_level(const Graph & graph, BDD & bdd, int level, int branch_vertex,
 }
 
 int solve_relaxed(const Graph & graph, BDD & bdd,
-        unsigned long long & relaxed_nodes_created, unsigned long long & relaxed_nodes_reused)
+        unsigned long long & relaxed_nodes_created, unsigned long long & relaxed_nodes_reused,
+        unsigned n_unassigned_variables)
 {
     for (unsigned level = 1 ; level <= bdd.height ; ++level) {
+        --n_unassigned_variables;
+
         int branch_vertex = select_branch_vertex(graph, bdd.levels[level - 1]);
         build_level(graph, bdd, level, branch_vertex, relaxed_nodes_created, relaxed_nodes_reused);
 
         auto & level_nodes = bdd.levels[level].nodes;
-        if (level_nodes.size() > bdd.relaxed_max_width) {
+        if (level_nodes.size() > n_unassigned_variables + 1) {
             sort(level_nodes.begin(), level_nodes.end(), [] (const Node & a, const Node & b) {
                     return make_tuple(a.score, a.state.count()) > make_tuple(b.score, b.state.count());
                     });
 
             Node merged = { 0, dynamic_bitset<>(graph.size(), 0) };
-            while (level_nodes.size() >= bdd.relaxed_max_width) {
+            while (level_nodes.size() >= n_unassigned_variables + 1) {
                 Node & n = level_nodes[level_nodes.size() - 1];
                 merged.score = max(merged.score, n.score);
                 merged.state |= n.state;
@@ -134,11 +131,12 @@ int solve_relaxed(const Graph & graph, BDD & bdd,
 }
 
 void solve_restricted(const Graph & graph, BDD & bdd, int & incumbent, unsigned long long & restricted_nodes_created,
-        unsigned long long & restricted_nodes_reused)
+        unsigned long long & restricted_nodes_reused, unsigned n_unassigned_variables)
 {
     int last_level = 0;
 
     for (unsigned level = 1 ; level <= bdd.height ; ++level) {
+        --n_unassigned_variables;
         int branch_vertex = select_branch_vertex(graph, bdd.levels[level - 1]);
         if (-1 == branch_vertex)
             break;
@@ -146,12 +144,12 @@ void solve_restricted(const Graph & graph, BDD & bdd, int & incumbent, unsigned 
         build_level(graph, bdd, level, branch_vertex, restricted_nodes_created, restricted_nodes_reused);
         last_level = level;
 
-        if (bdd.levels[level].nodes.size() > bdd.restricted_max_width) {
+        if (bdd.levels[level].nodes.size() > n_unassigned_variables + 1) {
             sort(bdd.levels[level].nodes.begin(), bdd.levels[level].nodes.end(), [] (const Node & a, const Node & b) {
                     return make_tuple(a.score, a.state.count()) > make_tuple(b.score, b.state.count());
                     });
 
-            bdd.levels[level].nodes.resize(bdd.restricted_max_width);
+            bdd.levels[level].nodes.resize(n_unassigned_variables + 1);
         }
     }
 
@@ -165,29 +163,32 @@ void solve_restricted(const Graph & graph, BDD & bdd, int & incumbent, unsigned 
 void solve(const Graph & graph, BDD & bdd, int & incumbent, unsigned long long & nodes_created, unsigned long long & nodes_reused,
         unsigned long long & relaxed_nodes_created, unsigned long long & relaxed_nodes_reused,
         unsigned long long & restricted_nodes_created, unsigned long long & restricted_nodes_reused,
-        unsigned long long & bdds_created, unsigned long long & bdds_pruned)
+        unsigned long long & bdds_created, unsigned long long & bdds_pruned,
+        unsigned n_unassigned_variables)
 {
     BDD restricted_bdd = bdd;
-    solve_restricted(graph, restricted_bdd, incumbent, restricted_nodes_created, restricted_nodes_reused);
+    solve_restricted(graph, restricted_bdd, incumbent, restricted_nodes_created, restricted_nodes_reused, n_unassigned_variables);
 
     for (unsigned level = 1 ; level <= bdd.height ; ++level) {
+        --n_unassigned_variables;
+
         int branch_vertex = select_branch_vertex(graph, bdd.levels[level - 1]);
         build_level(graph, bdd, level, branch_vertex, nodes_created, nodes_reused);
 
-        if (bdd.levels[level].nodes.size() > bdd.full_max_width) {
+        if (bdd.levels[level].nodes.size() > n_unassigned_variables + 1) {
             for (auto & n : bdd.levels[level].nodes) {
-                BDD relaxed_bdd(n.state.count(), n.state.count());
+                BDD relaxed_bdd(n.state.count());
                 relaxed_bdd.levels[0] = { Level{ { Node{ n.score, n.state } } } };
-                int bound = solve_relaxed(graph, relaxed_bdd, relaxed_nodes_created, relaxed_nodes_reused);
+                int bound = solve_relaxed(graph, relaxed_bdd, relaxed_nodes_created, relaxed_nodes_reused, n_unassigned_variables);
 
                 if (bound > incumbent) {
                     ++bdds_created;
-                    BDD child_bdd(n.state.count(), n.state.count());
+                    BDD child_bdd(n.state.count());
                     child_bdd.levels[0] = { Level{ { Node{ n.score, n.state } } } };
 
                     solve(graph, child_bdd, incumbent, nodes_created, nodes_reused, relaxed_nodes_created,
                             relaxed_nodes_reused, restricted_nodes_created, restricted_nodes_reused,
-                            bdds_created, bdds_pruned);
+                            bdds_created, bdds_pruned, n_unassigned_variables);
                 }
                 else {
                     ++bdds_pruned;
@@ -208,7 +209,7 @@ int main(int, char * argv[])
 {
     Graph graph = read_dimacs(argv[1]);
 
-    BDD bdd(graph.size(), graph.size());
+    BDD bdd(graph.size());
 
     dynamic_bitset<> all_vertices(graph.size(), 0);
     for (int i = 0 ; i < graph.size() ; ++i)
@@ -221,7 +222,7 @@ int main(int, char * argv[])
                   restricted_nodes_created = 0, restricted_nodes_reused = 0, bdds_created = 1, bdds_pruned = 0;
 
     solve(graph, bdd, incumbent, nodes_created, nodes_reused, relaxed_nodes_created, relaxed_nodes_reused,
-            restricted_nodes_created, restricted_nodes_reused, bdds_created, bdds_pruned);
+            restricted_nodes_created, restricted_nodes_reused, bdds_created, bdds_pruned, graph.size());
 
     cout << incumbent << " " << nodes_created << " " << nodes_reused << " " << bdds_created << " " << bdds_pruned << endl;
 }
