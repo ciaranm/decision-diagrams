@@ -8,6 +8,8 @@
 #include <type_traits>
 #include <cstdint>
 
+#include <boost/dynamic_bitset.hpp>
+
 /**
  * A graph, with an adjaceny matrix representation. We only provide the
  * operations we actually need.
@@ -21,18 +23,11 @@ class Graph
          * The adjaceny matrix type. Shouldn't really be public, but we
          * snoop around inside it when doing message passing.
          */
-        using AdjacencyMatrix = std::vector<std::uint8_t>;
+        using AdjacencyMatrix = std::vector<boost::dynamic_bitset<> >;
 
     private:
         int _size = 0;
         AdjacencyMatrix _adjacency;
-        bool _add_one_for_output;
-
-        /**
-         * Return the appropriate offset into _adjacency for the edge (a,
-         * b).
-         */
-        auto _position(int a, int b) const -> AdjacencyMatrix::size_type;
 
     public:
         /**
@@ -69,6 +64,11 @@ class Graph
          * What is the degree of a given vertex?
          */
         auto degree(int a) const -> int;
+
+        /**
+         * What is the neighbourhood of a given vertex?
+         */
+        auto neighbourhood(int v) const -> const boost::dynamic_bitset<> &;
 };
 
 #endif

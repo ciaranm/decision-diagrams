@@ -9,26 +9,23 @@ Graph::Graph(int size)
         resize(size);
 }
 
-auto Graph::_position(int a, int b) const -> AdjacencyMatrix::size_type
-{
-    return (a * _size) + b;
-}
-
 auto Graph::resize(int size) -> void
 {
     _size = size;
-    _adjacency.resize(size * size);
+    _adjacency.resize(_size);
+    for (auto & r : _adjacency)
+        r.resize(_size);
 }
 
 auto Graph::add_edge(int a, int b) -> void
 {
-    _adjacency[_position(a, b)] = 1;
-    _adjacency[_position(b, a)] = 1;
+    _adjacency[a][b] = 1;
+    _adjacency[b][a] = 1;
 }
 
 auto Graph::adjacent(int a, int b) const -> bool
 {
-    return _adjacency[_position(a, b)];
+    return _adjacency[a][b];
 }
 
 auto Graph::size() const -> int
@@ -38,9 +35,11 @@ auto Graph::size() const -> int
 
 auto Graph::degree(int a) const -> int
 {
-    return std::count_if(
-            _adjacency.begin() + a * _size,
-            _adjacency.begin() + (a + 1) * _size,
-            [] (int x) { return !!x; });
+    return _adjacency[a].count();
+}
+
+auto Graph::neighbourhood(int a) const -> const boost::dynamic_bitset<> &
+{
+    return _adjacency[a];
 }
 
