@@ -42,11 +42,31 @@ void add_node(Level & level, Node && node, unsigned long long & nodes_created, u
 
 const int max_width = 20;
 
+int select_branch_vertex(const Graph & graph, const Level & level)
+{
+    std::vector<int> counts(graph.size());
+
+    for (auto & n : level.nodes)
+        for (auto & v : n.p)
+            ++counts[v];
+
+    int best = -1;
+
+    for (unsigned i = 0 ; i < counts.size() ; ++i)
+        if (counts[i] != 0 && (-1 == best || counts[i] < counts[best]))
+            best = i;
+
+    if (-1 == best)
+        throw 0;
+
+    return best;
+}
+
 void build_level(const Graph & graph, BDD & bdd, int level, unsigned long long & a_nodes_created, unsigned long long & a_nodes_reused)
 {
     bdd.levels[level].nodes.reserve(bdd.levels[level - 1].nodes.size() * 2);
 
-    int branch_vertex = *std::next(bdd.levels[0].nodes.begin()->p.begin(), level - 1);
+    int branch_vertex = select_branch_vertex(graph, bdd.levels[level - 1]);
 
     for (auto & n : bdd.levels[level - 1].nodes) {
         if (n.p.count(branch_vertex)) {
