@@ -7,6 +7,9 @@
 #include <tuple>
 #include <utility>
 #include <atomic>
+#include <chrono>
+#include <mutex>
+#include <cstdlib>
 
 #include <boost/dynamic_bitset.hpp>
 
@@ -21,21 +24,58 @@ using std::set_union;
 using std::move;
 using std::vector;
 using std::atomic;
+using std::mutex;
+using std::unique_lock;
 
 using std::cout;
 using std::endl;
 
+using std::chrono::duration_cast;
+using std::chrono::milliseconds;
+using std::chrono::steady_clock;
+using std::chrono::time_point;
+
 using boost::dynamic_bitset;
+
+struct Stats
+{
+    atomic<unsigned long long> nodes_created{ 0 };
+    atomic<unsigned long long> nodes_reused{ 0 };
+    atomic<unsigned long long> bdds_created{ 0 };
+    atomic<unsigned long long> bdds_pruned{ 0 };
+
+    time_point<steady_clock> start_time = steady_clock::now();
+};
 
 struct Node
 {
-    unsigned score;           // number of accepted vertices so far
+    unsigned score;           // number of accepted vertices so far (i.e. path length)
+    dynamic_bitset<> clique;  // vertices accepted so far (i.e. one path of best length)
     dynamic_bitset<> state;   // vertices which remain to be selectable
 };
 
 struct Level
 {
     vector<Node> nodes;       // children of a particular BDD level
+
+    /**
+     * Add node to level, updating stats, merging it if it is a duplicate.
+     */
+    void add_node(Node && node, Stats & stats)
+    {
+        for (auto & d : nodes)
+            if (d.state == node.state) {
+                if (node.score > d.score) {
+                    d.score = node.score;
+                    d.clique = node.clique;
+                }
+                ++stats.nodes_reused;
+                return;
+            }
+
+        nodes.push_back(move(node));
+        ++stats.nodes_created;
+    }
 };
 
 struct BDD
@@ -53,25 +93,22 @@ struct BDD
     }
 };
 
-struct Stats
-{
-    atomic<unsigned long long> nodes_created{ 0 };
-    atomic<unsigned long long> nodes_reused{ 0 };
-    atomic<unsigned long long> bdds_created{ 0 };
-    atomic<unsigned long long> bdds_pruned{ 0 };
-};
-
 struct Incumbent
 {
     atomic<unsigned> value{ 0 };
 
-    void update(unsigned new_value)
+    mutex clique_mutex;
+    dynamic_bitset<> clique;
+
+    void update(const Node & node)
     {
         while (true) {
             unsigned current_value = value;
-            if (new_value > current_value) {
-                if (value.compare_exchange_strong(current_value, new_value)) {
-                    cout << "found " << new_value << endl;
+            if (node.score > current_value) {
+                if (value.compare_exchange_strong(current_value, node.score)) {
+                    unique_lock<mutex> lock(clique_mutex);
+                    clique = node.clique;
+                    cout << "incumbent = " << node.score << endl;
                     break;
                 }
             }
@@ -82,22 +119,6 @@ struct Incumbent
 };
 
 void solve(const Graph & graph, BDD & bdd, Incumbent & incumbent, Stats & stats);
-
-/**
- * Add node to level, updating stats, merging it if it is a duplicate.
- */
-void add_node(Level & level, Node && node, Stats & stats)
-{
-    for (auto & d : level.nodes)
-        if (d.state == node.state) {
-            d.score = max(d.score, node.score);
-            ++stats.nodes_reused;
-            return;
-        }
-
-    level.nodes.push_back(move(node));
-    ++stats.nodes_created;
-}
 
 /**
  * Select a vertex to branch on, from level. May return -1, if there are no
@@ -131,18 +152,17 @@ void build_level(const Graph & graph, BDD & bdd, int level, int branch_vertex, S
         // Does this node's state allow us to accept the branch vertex?
         if (n.state[branch_vertex]) {
             // Yes, the new level of the BDD gets an accept node.
-            Node accept = { n.score + 1, n.state };
-            accept.score = n.score + 1;
+            Node accept = n;
+            accept.score += 1;
+            accept.clique.set(branch_vertex);
             accept.state &= graph.neighbourhood(branch_vertex);
-            add_node(bdd.levels[level], move(accept), stats);
+            bdd.levels[level].add_node(move(accept), stats);
         }
 
         // The new level of the BDD always gets a reject node.
-        Node reject;
-        reject.score = n.score;
-        reject.state = n.state;
+        Node reject = n;
         reject.state.set(branch_vertex, false);
-        add_node(bdd.levels[level], move(reject), stats);
+        bdd.levels[level].add_node(move(reject), stats);
     }
 }
 
@@ -168,11 +188,12 @@ unsigned solve_relaxed(const Graph & graph, BDD & bdd, Stats & stats)
                     return make_tuple(a.score, a.state.count()) > make_tuple(b.score, b.state.count());
                     });
 
-            Node merged = { 0, dynamic_bitset<>(graph.size(), 0) };
+            Node merged = { 0, dynamic_bitset<>(graph.size(), 0), dynamic_bitset<>(graph.size(), 0) };
             while (level_nodes.size() >= bdd.n_unassigned + 1) {
                 Node & n = level_nodes[level_nodes.size() - 1];
                 merged.score = max(merged.score, n.score);
                 merged.state |= n.state;
+                merged.clique |= n.clique;
                 level_nodes.pop_back();
             }
             level_nodes.push_back(move(merged));
@@ -219,7 +240,7 @@ void solve_restricted(const Graph & graph, BDD & bdd, Incumbent & incumbent, Sta
 
     // We may have found a better solution.
     for (auto & n : bdd.levels[last_level].nodes)
-        incumbent.update(n.score);
+        incumbent.update(n);
 }
 
 /**
@@ -230,7 +251,7 @@ void solve_by_branching(const Graph & graph, const BDD & bdd, const Node & n, In
     BDD relaxed_bdd(n.state.count(), bdd.n_unassigned);
 
     // Start by getting a relaxed bound, to see if it's worth continuing.
-    relaxed_bdd.levels[0] = { Level{ { Node{ n.score, n.state } } } };
+    relaxed_bdd.levels[0] = { Level{ { n } } };
     unsigned bound = solve_relaxed(graph, relaxed_bdd, stats);
 
     // Are we any good?
@@ -238,7 +259,7 @@ void solve_by_branching(const Graph & graph, const BDD & bdd, const Node & n, In
         // Yes, now get an exact solution.
         ++stats.bdds_created;
         BDD child_bdd(n.state.count(), bdd.n_unassigned);
-        child_bdd.levels[0] = { Level{ { Node{ n.score, n.state } } } };
+        child_bdd.levels[0] = { Level{ { n } } };
 
         solve(graph, child_bdd, incumbent, stats);
     }
@@ -279,7 +300,7 @@ void solve(const Graph & graph, BDD & bdd, Incumbent & incumbent, Stats & stats)
     // We built a complete BDD. Pick off its leaf nodes for new candidate
     // solutions.
     for (auto & n : bdd.levels[bdd.height].nodes)
-        incumbent.update(n.score);
+        incumbent.update(n);
 }
 
 BDD create_root_bdd(const Graph & graph, Stats & stats)
@@ -291,15 +312,20 @@ BDD create_root_bdd(const Graph & graph, Stats & stats)
     all_vertices.set();
 
     // Create BDD with root node.
-    bdd.levels[0] = { Level{ { Node{ 0, all_vertices } } } };
+    bdd.levels[0] = { Level{ { Node{ 0, dynamic_bitset<>(graph.size()), all_vertices } } } };
 
     ++stats.bdds_created;
 
     return bdd;
 }
 
-int main(int, char * argv[])
+int main(int argc, char * argv[])
 {
+    if (argc != 2) {
+        cout << "Usage: " << argv[0] << " file.clq" << endl;
+        return EXIT_FAILURE;
+    }
+
     Graph graph = read_dimacs(argv[1]);
 
     Stats stats;
@@ -308,7 +334,24 @@ int main(int, char * argv[])
     BDD bdd = create_root_bdd(graph, stats);
     solve(graph, bdd, incumbent, stats);
 
-    cout << "size=" << incumbent.value << " nodes=" << stats.nodes_created << " nodes_reused=" << stats.nodes_reused
-        << " branches=" << stats.bdds_created << " pruned_branches=" << stats.bdds_pruned << endl;
+    cout << "solution =";
+    for (auto i = incumbent.clique.find_first() ; i != dynamic_bitset<>::npos ; i = incumbent.clique.find_next(i))
+        cout << " " << i + 1; // dimacs files are 1-indexed
+    cout << endl;
+
+    cout << "size = " << incumbent.value << endl;
+    cout << "runtime = " << duration_cast<milliseconds>(steady_clock::now() - stats.start_time).count() << "ms" << endl;
+    cout << "nodes = " << stats.nodes_created << " + " << stats.nodes_reused << endl;
+    cout << "branches = " << stats.bdds_created << " + " << stats.bdds_pruned << endl;
+
+    // sanity check...
+    for (auto i = incumbent.clique.find_first() ; i != dynamic_bitset<>::npos ; i = incumbent.clique.find_next(i))
+        for (auto j = incumbent.clique.find_first() ; j != dynamic_bitset<>::npos ; j = incumbent.clique.find_next(j))
+            if (i != j && ! graph.adjacent(i, j)) {
+                cout << "Oops! Horrific bug detected" << endl;
+                return EXIT_FAILURE;
+            }
+
+    return EXIT_SUCCESS;
 }
 
