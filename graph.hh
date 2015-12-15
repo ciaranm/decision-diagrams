@@ -18,16 +18,13 @@
  */
 class Graph
 {
-    public:
-        /**
-         * The adjaceny matrix type. Shouldn't really be public, but we
-         * snoop around inside it when doing message passing.
-         */
-        using AdjacencyMatrix = std::vector<boost::dynamic_bitset<> >;
-
     private:
+        using AdjacencyMatrix = std::vector<boost::dynamic_bitset<> >;
+        using Weights = std::vector<unsigned long long>;
+
         int _size = 0;
         AdjacencyMatrix _adjacency;
+        Weights _weights;
 
     public:
         /**
@@ -69,6 +66,10 @@ class Graph
          * What is the neighbourhood of a given vertex?
          */
         auto neighbourhood(int v) const -> const boost::dynamic_bitset<> &;
+
+        auto set_weight(int v, unsigned long long w) -> void;
+
+        auto weight(int v) const -> unsigned long long;
 };
 
 #endif

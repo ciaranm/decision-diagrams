@@ -15,6 +15,10 @@ auto Graph::resize(int size) -> void
     _adjacency.resize(_size);
     for (auto & r : _adjacency)
         r.resize(_size);
+
+    _weights.resize(_size);
+    for (auto & w : _weights)
+        w = 1;
 }
 
 auto Graph::add_edge(int a, int b) -> void
@@ -41,5 +45,15 @@ auto Graph::degree(int a) const -> int
 auto Graph::neighbourhood(int a) const -> const boost::dynamic_bitset<> &
 {
     return _adjacency[a];
+}
+
+auto Graph::set_weight(int v, unsigned long long w) -> void
+{
+    _weights[v] = w;
+}
+
+auto Graph::weight(int v) const -> unsigned long long
+{
+    return _weights[v];
 }
 

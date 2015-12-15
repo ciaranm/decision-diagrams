@@ -25,7 +25,8 @@ auto read_dimacs(const std::string & filename) -> Graph
         static const boost::regex
             comment{ R"(c(\s.*)?)" },
             problem{ R"(p\s+(edge|col)\s+(\d+)\s+(\d+)?\s*)" },
-            edge{ R"(e\s+(\d+)\s+(\d+)\s*)" };
+            edge{ R"(e\s+(\d+)\s+(\d+)\s*)" },
+            weight{ R"(n\s+(\d+)\s+(\d+)\s*)" };
 
         boost::smatch match;
         if (regex_match(line, match, comment)) {
@@ -47,6 +48,15 @@ auto read_dimacs(const std::string & filename) -> Graph
             else if (a == b)
                 throw GraphFileError{ filename, "line '" + line + "' contains a loop on vertex " + std::to_string(a) };
             result.add_edge(a - 1, b - 1);
+        }
+        else if (regex_match(line, match, weight)) {
+            /* An edge. DIMACS files are 1-indexed. We assume we've already had
+             * a problem line (if not our size will be 0, so we'll throw). */
+            int a{ std::stoi(match.str(1)) };
+            unsigned long long w{ std::stoull(match.str(2)) };
+            if (0 == a || a > result.size())
+                throw GraphFileError{ filename, "line '" + line + "' vertex index out of bounds" };
+            result.set_weight(a - 1, w);
         }
         else
             throw GraphFileError{ filename, "cannot parse line '" + line + "'" };

@@ -49,7 +49,7 @@ struct Stats
 
 struct Node
 {
-    unsigned score;           // number of accepted vertices so far (i.e. path length)
+    unsigned long long score;           // number of accepted vertices so far (i.e. path length)
     dynamic_bitset<> clique;  // vertices accepted so far (i.e. one path of best length)
     dynamic_bitset<> state;   // vertices which remain to be selectable
 };
@@ -95,7 +95,7 @@ struct BDD
 
 struct Incumbent
 {
-    atomic<unsigned> value{ 0 };
+    atomic<unsigned long long> value{ 0 };
 
     mutex clique_mutex;
     dynamic_bitset<> clique;
@@ -103,7 +103,7 @@ struct Incumbent
     void update(const Node & node)
     {
         while (true) {
-            unsigned current_value = value;
+            unsigned long long current_value = value;
             if (node.score > current_value) {
                 if (value.compare_exchange_strong(current_value, node.score)) {
                     unique_lock<mutex> lock(clique_mutex);
@@ -153,7 +153,7 @@ void build_level(const Graph & graph, BDD & bdd, int level, int branch_vertex, S
         if (n.state[branch_vertex]) {
             // Yes, the new level of the BDD gets an accept node.
             Node accept = n;
-            accept.score += 1;
+            accept.score += graph.weight(branch_vertex);
             accept.clique.set(branch_vertex);
             accept.state &= graph.neighbourhood(branch_vertex);
             bdd.levels[level].add_node(move(accept), stats);
@@ -202,7 +202,7 @@ unsigned solve_relaxed(const Graph & graph, BDD & bdd, Stats & stats)
 
     // The bound is found by looking at the score of every leaf node and
     // picking the best.
-    unsigned bound = 0;
+    unsigned long long bound = 0;
     for (auto & n : bdd.levels[bdd.height].nodes)
         bound = max(bound, n.score);
     return bound;
