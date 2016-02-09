@@ -1,0 +1,35 @@
+c Maximum weighted independent set instances generated from exactcolors.
+c scalef: 195225786 .
+c An independent set of value > 195225786 defines an improving stable sets for coloring.
+p edge 11 20
+e 1 2
+e 1 4
+e 1 7
+e 1 9
+e 2 3
+e 2 6
+e 2 8
+e 3 5
+e 3 7
+e 3 10
+e 4 5
+e 4 6
+e 4 10
+e 5 8
+e 5 9
+e 6 11
+e 7 11
+e 8 11
+e 9 11
+e 10 11
+n 1 58567735
+n 2 58567735
+n 3 58567735
+n 4 58567735
+n 5 58567735
+n 6 39045157
+n 7 39045157
+n 8 39045157
+n 9 39045157
+n 10 39045157
+n 11 78090314

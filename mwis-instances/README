@@ -1,0 +1,30 @@
+This is a collection of maximum weighted independent set (MWIS)
+instances as they arise during the computation of the fractional
+coloring number. See also:
+Mehrotra, A. and Trick, M. A.:
+A Column Generation Approach for Graph Coloring.
+INFORMS JOURNAL ON COMPUTING, vol. 8 (4), 344--354, 1996.
+
+For most instances they represent the last MWIS instance that needs to
+be solved, which is often the running time bottleneck.  For some
+instances column generation did not terminate and the instance refers
+to any intermediate MWIS instance, but not necessarily the final one.
+These instances have a number in their name between '.mwis.' ('.mwclq' resp.) 
+ and '.dimacs'.
+
+The directory mwis contains the original MWIS problems, while mwclq
+contains equivalent maximum weighted clique problems in the complement
+graphs.
+
+The scalef comment in each file is a threshold value.  In the column
+generation for computing the fractional coloring number, only stable
+sets heavier than scalef can improve the primal LP value.  'scalef' is
+the scaled representation of 1.0 in the original MWIS problem.
+
+For the purpose of coloring, one need not necessarily find the MWIS.
+Instead, it suffices to decide whether the weight of a MWIS is larger
+than scalef and, if so, return any stable such heavier than scalef.
+
+
+Stephan Held
+Georgia Tech

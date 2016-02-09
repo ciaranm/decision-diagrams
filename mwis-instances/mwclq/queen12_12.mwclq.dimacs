@@ -1,0 +1,16 @@
+c Maximum weighted clique instances generated from exactcolors.
+c cutoff: 14913080.
+c A clique of value > scalef (14913080) defines an improving stable sets for coloring.
+p edge 12 0
+n 1 14913079
+n 2 14913080
+n 3 14913080
+n 4 14913079
+n 5 14913079
+n 6 14913079
+n 7 14913079
+n 8 14913079
+n 9 14913079
+n 10 14913079
+n 11 14913079
+n 12 14913079
