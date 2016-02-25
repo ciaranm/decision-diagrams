@@ -135,7 +135,8 @@ struct Incumbent
     }
 };
 
-void solve(const Graph & graph, BDD & bdd, Incumbent & incumbent, Stats & stats, atomic<bool> & abort, const bool dominate);
+void solve(const Graph & graph, BDD & bdd, Incumbent & incumbent, Stats & stats, atomic<bool> & abort,
+        const bool dominate);
 
 /**
  * Select a vertex to branch on, from level. May return -1, if there are no
@@ -267,46 +268,58 @@ void solve_restricted(const Graph & graph, BDD & bdd, Incumbent & incumbent, Sta
 }
 
 /**
- * Given a node in a BDD, solve it exactly by creating a new BDD.
+ * Given a level of nodes in a BDD, solve them exactly by creating new BDDs.
  */
-void solve_by_branching(const Graph & graph, const BDD & bdd, const Node & n, Incumbent & incumbent, Stats & stats, atomic<bool> & abort,
+void solve_level_by_branching(const Graph & graph, const BDD & bdd, const vector<Node> & nodes,
+        Incumbent & incumbent, Stats & stats, atomic<bool> & abort,
         const bool dominate)
 {
-    if (abort.load())
-        return;
+    vector<unsigned long long> bounds(nodes.size(), 0);
 
-    BDD relaxed_bdd(n.state.count(), bdd.n_unassigned);
+    for (unsigned n_index = 0 ; n_index < nodes.size() ; ++n_index) {
+        const auto & n = nodes[n_index];
 
-    // Start by getting a relaxed bound, to see if it's worth continuing.
-    relaxed_bdd.levels[0] = { Level{ { n } } };
-    unsigned bound = solve_relaxed(graph, relaxed_bdd, stats, abort, dominate);
+        if (abort.load())
+            return;
 
-    // Are we any good?
-    if (bound > incumbent.value) {
-        // Yes, now get an exact solution.
-        ++stats.bdds_created;
-        BDD child_bdd(n.state.count(), bdd.n_unassigned);
-        child_bdd.levels[0] = { Level{ { n } } };
+        BDD relaxed_bdd(n.state.count(), bdd.n_unassigned);
 
-        solve(graph, child_bdd, incumbent, stats, abort, dominate);
+        // Start by getting a relaxed bound, to see if it's worth continuing.
+        relaxed_bdd.levels[0] = { Level{ { n } } };
+        bounds[n_index] = solve_relaxed(graph, relaxed_bdd, stats, abort, dominate);
+
+        // Are we any good?
+        if (bounds[n_index] > incumbent.value) {
+            // Yes, now get a restricted solution.
+            BDD restricted_bdd(n.state.count(), bdd.n_unassigned);
+            restricted_bdd.levels[0] = { Level{ { n } } };
+            solve_restricted(graph, restricted_bdd, incumbent, stats, abort, dominate);
+        }
     }
-    else {
-        ++stats.bdds_pruned;
+
+    for (unsigned n_index = 0 ; n_index < nodes.size() ; ++n_index) {
+        const auto & n = nodes[n_index];
+
+        if (bounds[n_index] > incumbent.value) {
+            ++stats.bdds_created;
+
+            BDD child_bdd(n.state.count(), bdd.n_unassigned);
+            child_bdd.levels[0] = { Level{ { n } } };
+
+            solve(graph, child_bdd, incumbent, stats, abort, dominate);
+        }
+        else
+            ++stats.bdds_pruned;
     }
 }
 
 /**
  * Solve a BDD.
  */
-void solve(const Graph & graph, BDD & bdd, Incumbent & incumbent, Stats & stats, atomic<bool> & abort,
-        const bool dominate)
+void solve(const Graph & graph, BDD & bdd, Incumbent & incumbent, Stats & stats, atomic<bool> & abort, const bool dominate)
 {
     if (abort.load())
         return;
-
-    // Start by building a restricted BDD, just to get a good incumbent quickly.
-    BDD restricted_bdd = bdd;
-    solve_restricted(graph, restricted_bdd, incumbent, stats, abort, dominate);
 
     // Build up each level...
     for (unsigned level = 1 ; level <= bdd.height ; ++level) {
@@ -318,11 +331,8 @@ void solve(const Graph & graph, BDD & bdd, Incumbent & incumbent, Stats & stats,
 
         // Is our newly created level too wide?
         if (bdd.levels[level].nodes.size() > bdd.n_unassigned + 1) {
-            // Yes, solve each of its nodes independently and in parallel using
-            // new BDDs.
-            for (auto & n : bdd.levels[level].nodes) {
-                solve_by_branching(graph, bdd, n, incumbent, stats, abort, dominate);
-            }
+            // Yes, solve each of its nodes independently using new BDDs.
+            solve_level_by_branching(graph, bdd, bdd.levels[level].nodes, incumbent, stats, abort, dominate);
             return;
         }
     }
@@ -412,16 +422,16 @@ int main(int argc, char * argv[])
             timeout_thread = thread([&] {
                     auto abort_time = steady_clock::now() + seconds(timeout);
                     {
-                    /* Sleep until either we've reached the time limit,
-                     * or we've finished all the work. */
-                    unique_lock<mutex> guard(timeout_mutex);
-                    while (! abort.load()) {
-                    if (cv_status::timeout == timeout_cv.wait_until(guard, abort_time)) {
-                    /* We've woken up, and it's due to a timeout. */
-                    aborted = true;
-                    break;
-                    }
-                    }
+                        /* Sleep until either we've reached the time limit,
+                         * or we've finished all the work. */
+                        unique_lock<mutex> guard(timeout_mutex);
+                        while (! abort.load()) {
+                            if (cv_status::timeout == timeout_cv.wait_until(guard, abort_time)) {
+                                /* We've woken up, and it's due to a timeout. */
+                                aborted = true;
+                                break;
+                            }
+                        }
                     }
                     abort.store(true);
                     });
@@ -433,8 +443,17 @@ int main(int argc, char * argv[])
         Stats stats;
         Incumbent incumbent;
 
-        BDD bdd = create_root_bdd(graph, stats);
-        solve(graph, bdd, incumbent, stats, abort, dominate);
+        {
+            BDD bdd = create_root_bdd(graph, stats);
+
+            {
+                // Start by building a restricted BDD, just to get a good incumbent quickly.
+                BDD restricted_bdd = bdd;
+                solve_restricted(graph, restricted_bdd, incumbent, stats, abort, dominate);
+            }
+
+            solve(graph, bdd, incumbent, stats, abort, dominate);
+        }
 
         /* Clean up the timeout thread */
         if (timeout_thread.joinable()) {
