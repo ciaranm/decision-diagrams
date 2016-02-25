@@ -1,3 +1,4 @@
 intermediate
 build
 cliquedd
+*.out*
