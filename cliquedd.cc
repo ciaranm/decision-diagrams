@@ -13,8 +13,6 @@
 
 #include <boost/dynamic_bitset.hpp>
 
-#include <cilk/cilk.h>
-
 #include "graph.hh"
 #include "dimacs.hh"
 
@@ -290,9 +288,8 @@ void solve(const Graph & graph, BDD & bdd, Incumbent & incumbent, Stats & stats)
             // Yes, solve each of its nodes independently and in parallel using
             // new BDDs.
             for (auto & n : bdd.levels[level].nodes) {
-                cilk_spawn solve_by_branching(graph, bdd, n, incumbent, stats);
+                solve_by_branching(graph, bdd, n, incumbent, stats, abort, dominate);
             }
-            cilk_sync;
             return;
         }
     }
