@@ -14,9 +14,12 @@
 #include <cstdlib>
 
 #include <boost/dynamic_bitset.hpp>
+#include <boost/program_options.hpp>
 
 #include "graph.hh"
 #include "dimacs.hh"
+
+namespace po = boost::program_options;
 
 using std::make_tuple;
 using std::max;
@@ -348,77 +351,134 @@ BDD create_root_bdd(const Graph & graph, Stats & stats)
 
 int main(int argc, char * argv[])
 {
-    if (argc != 2 && (argc != 3 || string(argv[1]) != "-d")) {
-        cout << "Usage: " << argv[0] << " [ -d ] file.clq" << endl;
-        return EXIT_FAILURE;
-    }
+    try {
+        po::options_description display_options{ "Program options" };
+        display_options.add_options()
+            ("help",                                  "Display help information")
+            ("timeout",            po::value<int>(),  "Abort after this many seconds")
+            ("domination",         po::value<int>(),  "Dominance detection power (0 for none)")
+            ;
 
-    int timeout = 14400;
-    bool aborted = false;
+        po::options_description all_options{ "All options" };
+        all_options.add_options()
+            ("clique-file",      po::value<std::string>(), "Clique file")
+            ;
 
-    Graph graph = read_dimacs(argv[argc - 1]);
+        all_options.add(display_options);
 
-    thread timeout_thread;
-    mutex timeout_mutex;
-    condition_variable timeout_cv;
-    atomic<bool> abort{ false };
-    if (0 != timeout) {
-        timeout_thread = thread([&] {
-                auto abort_time = steady_clock::now() + seconds(timeout);
-                {
+        po::positional_options_description positional_options;
+        positional_options
+            .add("clique-file", 1)
+            ;
+
+        po::variables_map options_vars;
+        po::store(po::command_line_parser(argc, argv)
+                .options(all_options)
+                .positional(positional_options)
+                .run(), options_vars);
+        po::notify(options_vars);
+
+        /* --help? Show a message, and exit. */
+        if (options_vars.count("help")) {
+            std::cout << "Usage: " << argv[0] << " [options] clique-file" << std::endl;
+            std::cout << std::endl;
+            std::cout << display_options << std::endl;
+            return EXIT_SUCCESS;
+        }
+
+        /* No input file specified? Show a message and exit. */
+        if (! options_vars.count("clique-file")) {
+            std::cout << "Usage: " << argv[0] << " [options] clique-file" << std::endl;
+            return EXIT_FAILURE;
+        }
+
+        int timeout = 0;
+        if (options_vars.count("timeout"))
+            timeout = options_vars["timeout"].as<int>();
+
+        bool dominate = false;
+        if (options_vars.count("domination"))
+            dominate = options_vars["domination"].as<int>() > 0;
+
+        bool aborted = false;
+
+        Graph graph = read_dimacs(options_vars["clique-file"].as<std::string>());
+
+        thread timeout_thread;
+        mutex timeout_mutex;
+        condition_variable timeout_cv;
+        atomic<bool> abort{ false };
+        if (0 != timeout) {
+            timeout_thread = thread([&] {
+                    auto abort_time = steady_clock::now() + seconds(timeout);
+                    {
                     /* Sleep until either we've reached the time limit,
                      * or we've finished all the work. */
                     unique_lock<mutex> guard(timeout_mutex);
                     while (! abort.load()) {
-                        if (cv_status::timeout == timeout_cv.wait_until(guard, abort_time)) {
-                            /* We've woken up, and it's due to a timeout. */
-                            aborted = true;
-                            break;
-                        }
+                    if (cv_status::timeout == timeout_cv.wait_until(guard, abort_time)) {
+                    /* We've woken up, and it's due to a timeout. */
+                    aborted = true;
+                    break;
                     }
-                }
-                abort.store(true);
-                });
-    }
-
-    /* Start the clock */
-    auto start_time = steady_clock::now();
-
-    Stats stats;
-    Incumbent incumbent;
-
-    BDD bdd = create_root_bdd(graph, stats);
-    solve(graph, bdd, incumbent, stats, abort, argc == 3);
-
-    /* Clean up the timeout thread */
-    if (timeout_thread.joinable()) {
-        {
-            unique_lock<mutex> guard(timeout_mutex);
-            abort.store(true);
-            timeout_cv.notify_all();
+                    }
+                    }
+                    abort.store(true);
+                    });
         }
-        timeout_thread.join();
-    }
 
-    cout << "timeout = " << boolalpha << aborted << endl;
-    cout << "solution =";
-    for (auto i = incumbent.clique.find_first() ; i != dynamic_bitset<>::npos ; i = incumbent.clique.find_next(i))
-        cout << " " << i + 1; // dimacs files are 1-indexed
-    cout << endl;
+        /* Start the clock */
+        auto start_time = steady_clock::now();
 
-    cout << "size = " << incumbent.value << endl;
-    cout << "runtime = " << duration_cast<milliseconds>(steady_clock::now() - start_time).count() << "ms" << endl;
-    cout << "nodes = " << stats.nodes_created << " + " << stats.nodes_reused << endl;
-    cout << "branches = " << stats.bdds_created << " + " << stats.bdds_pruned << endl;
+        Stats stats;
+        Incumbent incumbent;
 
-    // sanity check...
-    for (auto i = incumbent.clique.find_first() ; i != dynamic_bitset<>::npos ; i = incumbent.clique.find_next(i))
-        for (auto j = incumbent.clique.find_first() ; j != dynamic_bitset<>::npos ; j = incumbent.clique.find_next(j))
-            if (i != j && ! graph.adjacent(i, j)) {
-                cout << "Oops! Horrific bug detected" << endl;
-                return EXIT_FAILURE;
+        BDD bdd = create_root_bdd(graph, stats);
+        solve(graph, bdd, incumbent, stats, abort, dominate);
+
+        /* Clean up the timeout thread */
+        if (timeout_thread.joinable()) {
+            {
+                unique_lock<mutex> guard(timeout_mutex);
+                abort.store(true);
+                timeout_cv.notify_all();
             }
+            timeout_thread.join();
+        }
 
-    return EXIT_SUCCESS;
+        cout << "timeout = " << boolalpha << aborted << endl;
+        cout << "solution =";
+        for (auto i = incumbent.clique.find_first() ; i != dynamic_bitset<>::npos ; i = incumbent.clique.find_next(i))
+            cout << " " << i + 1; // dimacs files are 1-indexed
+        cout << endl;
+
+        cout << "size = " << incumbent.value << endl;
+        cout << "runtime = " << duration_cast<milliseconds>(steady_clock::now() - start_time).count() << "ms" << endl;
+        cout << "nodes = " << stats.nodes_created << " + " << stats.nodes_reused << endl;
+        cout << "branches = " << stats.bdds_created << " + " << stats.bdds_pruned << endl;
+
+        // sanity check...
+        for (auto i = incumbent.clique.find_first() ; i != dynamic_bitset<>::npos ; i = incumbent.clique.find_next(i))
+            for (auto j = incumbent.clique.find_first() ; j != dynamic_bitset<>::npos ; j = incumbent.clique.find_next(j))
+                if (i != j && ! graph.adjacent(i, j)) {
+                    cout << "Oops! Horrific bug detected" << endl;
+                    return EXIT_FAILURE;
+                }
+
+        return EXIT_SUCCESS;
+    }
+    catch (const po::error & e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Try " << argv[0] << " --help" << std::endl;
+        return EXIT_FAILURE;
+    }
+    catch (const std::exception & e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return EXIT_FAILURE;
+    }
+    if (argc != 2 && (argc != 3 || string(argv[1]) != "-d")) {
+        cout << "Usage: " << argv[0] << " [ -d ] file.clq" << endl;
+        return EXIT_FAILURE;
+    }
 }
 
