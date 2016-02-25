@@ -495,9 +495,5 @@ int main(int argc, char * argv[])
         std::cerr << "Error: " << e.what() << std::endl;
         return EXIT_FAILURE;
     }
-    if (argc != 2 && (argc != 3 || string(argv[1]) != "-d")) {
-        cout << "Usage: " << argv[0] << " [ -d ] file.clq" << endl;
-        return EXIT_FAILURE;
-    }
 }
 
