@@ -161,6 +161,10 @@ struct Incumbent
                     unique_lock<mutex> lock(clique_mutex);
                     clique = node.clique;
                     cout << "incumbent = " << node.score << endl;
+                    cout << "candidate =";
+                    for (auto i = clique.find_first() ; i != dynamic_bitset<>::npos ; i = clique.find_next(i))
+                        cout << " " << i + 1; // dimacs files are 1-indexed
+                    cout << endl;
                     break;
                 }
             }
