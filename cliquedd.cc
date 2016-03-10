@@ -227,7 +227,7 @@ void build_level(const Graph & graph, BDD & bdd, int level, int branch_vertex, S
  * Solve a relaxed form of the BDD, to get an upper bound on its actual best
  * value.
  */
-unsigned solve_relaxed(const Graph & graph, BDD & bdd, Stats & stats, atomic<bool> & abort, const int domination)
+unsigned long long solve_relaxed(const Graph & graph, BDD & bdd, Stats & stats, atomic<bool> & abort, const int domination)
 {
     if (abort.load())
         return 0;
